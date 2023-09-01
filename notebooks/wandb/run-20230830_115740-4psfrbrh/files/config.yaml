@@ -1,0 +1,45 @@
+wandb_version: 1
+
+DATASET1:
+  desc: null
+  value: celeba_female
+DATASET2:
+  desc: null
+  value: aligned_anime_faces
+T_ITERS:
+  desc: null
+  value: 10
+f_LR:
+  desc: null
+  value: 0.0001
+T_LR:
+  desc: null
+  value: 0.0001
+BATCH_SIZE:
+  desc: null
+  value: 64
+_wandb:
+  desc: null
+  value:
+    python_version: 3.8.10
+    cli_version: 0.15.8
+    framework: torch
+    is_jupyter_run: true
+    is_kaggle_kernel: false
+    start_time: 1693385860.824945
+    t:
+      1:
+      - 1
+      - 5
+      - 41
+      - 53
+      - 55
+      3:
+      - 13
+      - 16
+      - 23
+      4: 3.8.10
+      5: 0.15.8
+      8:
+      - 1
+      - 5

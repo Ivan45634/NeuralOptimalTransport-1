@@ -1,0 +1,50 @@
+wandb_version: 1
+
+DATASET1:
+  desc: null
+  value: celeba_female
+DATASET2:
+  desc: null
+  value: aligned_anime_faces
+T_ITERS:
+  desc: null
+  value: 10
+f_LR:
+  desc: null
+  value: 0.0002
+T_LR:
+  desc: null
+  value: 0.0002
+BATCH_SIZE:
+  desc: null
+  value: 256
+OUTPUT_PATH:
+  desc: null
+  value: ../checkpoints/mse/celeba_female_aligned_anime_faces_64_2023-08-31-07-43-28/
+_wandb:
+  desc: null
+  value:
+    python_version: 3.8.10
+    cli_version: 0.15.8
+    framework: torch
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    start_time: 1693457025.596091
+    t:
+      1:
+      - 1
+      - 5
+      - 41
+      - 49
+      - 53
+      - 55
+      - 71
+      - 83
+      3:
+      - 13
+      - 16
+      - 23
+      4: 3.8.10
+      5: 0.15.8
+      8:
+      - 5

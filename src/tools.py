@@ -1,3 +1,5 @@
+from typing import Union
+from pathlib import Path
 import pandas as pd
 import numpy as np
 
@@ -5,13 +7,15 @@ import os
 import itertools
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn, Tensor
+from torch.nn import functional as F
 
 from tqdm import tqdm_notebook
 import multiprocessing
 
 from PIL import Image
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 from .inception import InceptionV3
 from tqdm import tqdm_notebook as tqdm
 from .fid_score import calculate_frechet_distance
@@ -21,20 +25,55 @@ from torch.utils.data import TensorDataset
 
 import gc
 
-from torch.utils.data import Subset, DataLoader
+from torch.utils.data import Subset, DataLoader, Dataset
 from torchvision.transforms import Compose, Resize, Normalize, ToTensor, RandomCrop
 from torchvision.datasets import ImageFolder
 
 
-def load_dataset(name, path, img_size=64, batch_size=64, test_ratio=0.1, device='cuda'):
+class LatentsDataset(Dataset):
+    def __init__(self, path: Union[str, Path]) -> None:
+        super().__init__()
+        self.data_dir = Path(path)
+        self.files_list = sorted(list(self.data_dir.glob('*.pt')))
+
+    def __getitem__(self, index: int) -> Tensor:
+        return torch.load(self.files_list[index]), torch.tensor(0)
+
+    def __len__(self) -> int:
+        return len(self.files_list)
+
+
+def load_latents_dataset(path, batch_size=64, device='cuda', num_workers=8):
+    train_path = Path(path) / "train"
+    test_path = Path(path) / "test"
+    train_dataset = LatentsDataset(path=train_path)
+    test_dataset = LatentsDataset(path=test_path)
+    train_sampler = LoaderSampler(
+        DataLoader(train_dataset, shuffle=True, num_workers=num_workers, batch_size=batch_size), device
+    )
+    test_sampler = LoaderSampler(
+        DataLoader(test_dataset, shuffle=True, num_workers=num_workers, batch_size=batch_size), device
+    )
+    return train_sampler, test_sampler
+
+
+def check_image(path):
+    try:
+        im = Image.open(path)
+        return True
+    except:
+        return False
+
+
+def load_dataset(name, path, img_size=64, batch_size=64, test_ratio=0.1, device='cuda', num_workers=8):
     if name in ['shoes', 'handbag', 'outdoor', 'church']:
         dataset = h5py_to_dataset(path, img_size)
     elif name in ['celeba_female', 'celeba_male', 'aligned_anime_faces', 'describable_textures']:
         transform = Compose([Resize((img_size, img_size)), ToTensor(), Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-        dataset = ImageFolder(path, transform=transform)
+        dataset = ImageFolder(path, transform=transform, is_valid_file=check_image)
     else:
         raise Exception('Unknown dataset')
-        
+
     if name in ['celeba_female', 'celeba_male']:
         with open('../datasets/list_attr_celeba.txt', 'r') as f:
             lines = f.readlines()[2:]
@@ -46,13 +85,17 @@ def load_dataset(name, path, img_size=64, batch_size=64, test_ratio=0.1, device=
         idx = np.random.RandomState(seed=0xBADBEEF).permutation(len(dataset))
     else:
         idx = list(range(len(dataset)))
-        
+
     test_size = int(len(idx) * test_ratio)
     train_idx, test_idx = idx[:-test_size], idx[-test_size:]
     train_set, test_set = Subset(dataset, train_idx), Subset(dataset, test_idx)
 
-    train_sampler = LoaderSampler(DataLoader(train_set, shuffle=True, num_workers=8, batch_size=batch_size), device)
-    test_sampler = LoaderSampler(DataLoader(test_set, shuffle=True, num_workers=8, batch_size=batch_size), device)
+    train_sampler = LoaderSampler(
+        DataLoader(train_set, shuffle=True, num_workers=num_workers, batch_size=batch_size), device
+    )
+    test_sampler = LoaderSampler(
+        DataLoader(test_set, shuffle=True, num_workers=num_workers, batch_size=batch_size), device
+    )
     return train_sampler, test_sampler
 
 def ewma(x, span=200):
@@ -61,13 +104,13 @@ def ewma(x, span=200):
 def freeze(model):
     for p in model.parameters():
         p.requires_grad_(False)
-    model.eval()    
-    
+    model.eval()
+
 def unfreeze(model):
     for p in model.parameters():
         p.requires_grad_(True)
     model.train(True)
-    
+
 def weights_init_D(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -75,7 +118,7 @@ def weights_init_D(m):
     elif classname.find('BatchNorm') != -1:
         nn.init.constant_(m.weight, 1)
         nn.init.constant_(m.bias, 0)
-        
+
 def weights_init_mlp(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
@@ -89,12 +132,12 @@ def fig2data ( fig ):
     """
     # draw the renderer
     fig.canvas.draw ( )
- 
+
     # Get the RGBA buffer from the figure
     w,h = fig.canvas.get_width_height()
     buf = np.fromstring ( fig.canvas.tostring_argb(), dtype=np.uint8 )
     buf.shape = ( w, h,4 )
- 
+
     # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
     buf = np.roll ( buf, 3, axis = 2 )
     return buf
@@ -114,7 +157,7 @@ def h5py_to_dataset(path, img_size=64):
         data = list(f[a_group_key])
     with torch.no_grad():
         dataset = 2 * (torch.tensor(np.array(data), dtype=torch.float32) / 255.).permute(0, 3, 1, 2) - 1
-        dataset = F.interpolate(dataset, img_size, mode='bilinear')    
+        dataset = F.interpolate(dataset, img_size, mode='bilinear')
 
     return TensorDataset(dataset, torch.zeros(len(dataset)))
 
@@ -123,10 +166,10 @@ def get_loader_stats(loader, batch_size=8, verbose=False):
     block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
     model = InceptionV3([block_idx]).cuda()
     freeze(model)
-    
+
     size = len(loader.dataset)
     pred_arr = []
-    
+
     with torch.no_grad():
         for step, (X, _) in enumerate(loader) if not verbose else tqdm(enumerate(loader)):
             for i in range(0, len(X), batch_size):
@@ -145,10 +188,10 @@ def get_pushed_loader_stats(T, loader, batch_size=8, verbose=False, device='cuda
     block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
     model = InceptionV3([block_idx], use_downloaded_weights=use_downloaded_weights).to(device)
     freeze(model); freeze(T)
-    
+
     size = len(loader.dataset)
     pred_arr = []
-    
+
     with torch.no_grad():
         for step, (X, _) in enumerate(loader) if not verbose else tqdm(enumerate(loader)):
             for i in range(0, len(X), batch_size):
@@ -168,10 +211,10 @@ def get_Z_pushed_loader_stats(T, loader, ZC=1, Z_STD=0.1, batch_size=8, verbose=
     block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
     model = InceptionV3([block_idx], use_downloaded_weights=use_downloaded_weights).to(device)
     freeze(model); freeze(T)
-    
+
     size = len(loader.dataset)
     pred_arr = []
-    
+
     with torch.no_grad():
         for step, (X, _) in enumerate(loader) if not verbose else tqdm(enumerate(loader)):
             Z = torch.randn(len(X), ZC, X.size(2), X.size(3)) * Z_STD
@@ -184,4 +227,34 @@ def get_Z_pushed_loader_stats(T, loader, ZC=1, Z_STD=0.1, batch_size=8, verbose=
     pred_arr = np.vstack(pred_arr)
     mu, sigma = np.mean(pred_arr, axis=0), np.cov(pred_arr, rowvar=False)
     gc.collect(); torch.cuda.empty_cache()
+    return mu, sigma
+
+def get_latent_Z_pushed_loader_stats(T, decoder, loader, ZC=1, Z_STD=0.1, batch_size=8, verbose=False,
+                              device='cuda',
+                              use_downloaded_weights=False):
+    dims = 2048
+    block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
+    model = InceptionV3([block_idx], use_downloaded_weights=use_downloaded_weights).to(device)
+    freeze(model)
+    freeze(T)
+    freeze(decoder)
+
+    size = len(loader.dataset)
+    pred_arr = []
+
+    with torch.no_grad():
+        for step, (X, _) in enumerate(loader) if not verbose else tqdm(enumerate(loader)):
+            Z = torch.randn(len(X), ZC, X.size(2), X.size(3)) * Z_STD
+            XZ = torch.cat([X,Z], dim=1)
+            for i in range(0, len(X), batch_size):
+                start, end = i, min(i + batch_size, len(X))
+                T_XZ = T(XZ[start:end].type(torch.FloatTensor).to(device))
+                T_XZ_decoded = decoder.decode(T_XZ).sample
+                batch = T_XZ_decoded.add(1).mul(.5)
+                pred_arr.append(model(batch)[0].cpu().data.numpy().reshape(end-start, -1))
+
+    pred_arr = np.vstack(pred_arr)
+    mu, sigma = np.mean(pred_arr, axis=0), np.cov(pred_arr, rowvar=False)
+    gc.collect()
+    torch.cuda.empty_cache()
     return mu, sigma
